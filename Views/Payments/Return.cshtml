@@ -1,0 +1,18 @@
+﻿@{
+    ViewData["Title"] = "Transaction Result";
+}
+
+<div class="text-center">
+    <h1>Transaction Result</h1>
+    <h1>@ViewBag.accessCode</h1>
+    @if (Context.Request.Query.ContainsKey("ApprovalCode"))
+    {
+        <p style="color: green;">Transaction was successful!</p>
+    }
+    else
+    {
+        <p>Status transaction is not known.</p>
+    }
+
+    <a href="@Url.Action("Payments/Index")" class="btn btn-primary">Return to Payment</a>
+</div>

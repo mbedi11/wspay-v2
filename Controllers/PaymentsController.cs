@@ -10,15 +10,24 @@ using wspay_v2.Models;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System.Reflection.Metadata;
+using wspay_v2.Services;
+using System.Diagnostics;
 namespace wspay_v2.Controllers
 {
     public class PaymentsController : Controller
     {
         private readonly ApplicationDbContext _context;
+        private readonly ILogger<PaymentsController> _logger;
+        private readonly IPaymentService _paymentService;
 
-        public PaymentsController(ApplicationDbContext context)
+
+        public PaymentsController(ApplicationDbContext context, ILogger<PaymentsController> logger, IPaymentService paymentService)
         {
             _context = context;
+            _logger = logger;
+            _paymentService = paymentService ?? throw new ArgumentNullException(nameof(paymentService));
+
         }
 
         // GET: Payments
@@ -27,24 +36,91 @@ namespace wspay_v2.Controllers
             return View(await _context.Payment.ToListAsync());
         }
 
-        public async Task<IActionResult> PaymentForm(int id)
+        [HttpGet]
+        public async Task<IActionResult> PaymentForm(int? id)
         {
-            var payment = await _context.Payment.FindAsync(id);
-            if (payment == null)
+
+            var errorViewModel = new ErrorViewModel
+            {
+                RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier,
+            };
+            
+
+            // Validation
+
+            if (id == null)
             {
                 return NotFound();
             }
-            return View(payment);
+
+        
+            // Buildling model
+
+
+            if (_paymentService == null)
+            {
+                _logger.LogError("Payment service is not initialized.");
+                return View("Error");
+            }
+
+            var payment = new Payment();
+
+            try
+            {
+                //var result =
+                //    await _paymentService.GetPaymentDetailsDto(id);
+                var result = await _paymentService.GetPaymentDetailsDto(id);
+                if (result.IsSuccess)
+                {
+                    return View(result.Value);
+                }
+                else
+                {
+                    _logger.LogError($"Payment details for id {id} not found");
+                    return View("Error", new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier, Message = "Payment not found" });
+                }
+            }
+            catch (ArgumentNullException ex)
+            {
+                _logger.LogError(ex, $"ArgumentNullException occurred while retrieving payment with id {id}");
+                return View("Error", new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier, Message = ex.Message });
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                _logger.LogError(ex, $"ArgumentOutOfRangeException occurred while retrieving payment with id {id}");
+                return View("Error", new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier, Message = ex.Message });
+            }
+           
+
+            //if (result.IsSuccess)
+            //{
+            //    Logging
+            //    return View(result.Value);
+            //}
+            //else
+            //{
+            //    // Logging
+
+            //    _logger.LogError($"Payment details for id {id} not found");
+            //     return View(errorViewModel);
+            //    return View("Error");
+            //}
         }
+
         //[Route("Payments")]
-        [HttpGet("Return")]
+        [HttpGet]
+        [Route("Payments/Return")]
         public async Task<IActionResult> Return()
         {
-            // Čitanje samo approval koda
-            string approvalCode = HttpContext.Request.Query["ApprovalCode"];
 
-            // Koristite approval kod prema potrebi
-            ViewBag.ApprovalCode = approvalCode;
+            // Log all query parameters
+            foreach (var key in HttpContext.Request.Query.Keys)
+            {
+                _logger.LogInformation($"Query param: {key} = {HttpContext.Request.Query[key]}");
+            }
+
+            string approvalCode = HttpContext.Request.Query["ApprovalCode"];
+            ViewBag.accessCode = approvalCode;
             return View("Return");
         }
 
@@ -79,45 +155,27 @@ namespace wspay_v2.Controllers
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Create([Bind("PaymentId,ShopID,ShoppingCartID,Version,TotalAmount,Signature,ReturnURL,CancelURL,ReturnErrorURL")] Payment payment)
         {
-            if (ModelState.IsValid)
+            if (!ModelState.IsValid)
+                return Problem("Model state is invalid");
+
+            var paymentResponse = _paymentService.CreatePaymentAsync(payment);
+
+            if (paymentResponse?.Result!=null && paymentResponse.Result.IsSuccess)
             {
-                payment.Signature = GenerateSignature(payment);
-                payment.ReturnURL = $"{Request.Scheme}://{Request.Host}/Return";
-                payment.ReturnErrorURL = $"{Request.Scheme}://{Request.Host}/returnError";
-                payment.CancelURL = $"{Request.Scheme}://{Request.Host}/cancel";
-                _context.Add(payment);
-                await _context.SaveChangesAsync();
-                return RedirectToAction(nameof(Index));
+                // Log success
+                _logger.LogInformation($"Payment created successfully with ID: {payment.PaymentId}");
             }
-            return View(payment);
-        }
-        
-        /////////////////////////////////////////////////////////MALO NA BRZINU HACK SAMO ZA KREIRANJE MODELA DA GA MOZEMO POZVAT U FORMI
-        private string GenerateSignature(Payment payment)
-        {
-            string secretKey = "074c6ca334fb4W";
-            string rawData = payment.ShopID + secretKey + payment.ShoppingCartID + secretKey + payment.TotalAmount.ToString().Replace(",", "") + secretKey;
-            return sha512(rawData);
+            else
+            {
+                // Log failure
+                _logger.LogError(
+                    $"Failed to create payment: {paymentResponse.Result.Message}");
+                return View("Error", new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier, Message = paymentResponse.Result.Message });
+            }
+
+            return RedirectToAction(nameof(Index));
         }
 
-        private string sha512(string input)
-        {
-            using (SHA512 sha512Hash = SHA512.Create())
-            {
-                // ComputeHash - returns byte array
-                byte[] bytes = sha512Hash.ComputeHash(Encoding.UTF8.GetBytes(input));
-
-                // Convert byte array to a string
-                StringBuilder builder = new StringBuilder();
-                for (int i = 0; i < bytes.Length; i++)
-                {
-                    builder.Append(bytes[i].ToString("x2"));
-                }
-                return builder.ToString();
-            }
-        }
-        ////////////////////////////////////////////////////////////generate signature create function
-        
 
         // GET: Payments/Edit/5
         public async Task<IActionResult> Edit(int? id)
@@ -150,8 +208,8 @@ namespace wspay_v2.Controllers
             if (ModelState.IsValid)
             {
                 try
-                {   
-                    payment.Signature = GenerateSignature(payment);
+                {
+                    payment.GenerateSignature();
                     _context.Update(payment);
                     await _context.SaveChangesAsync();
                 }

@@ -20,7 +20,7 @@
             <div class="form-group">
                 <label asp-for="ShoppingCartID" class="control-label"></label>
                 <input asp-for="ShoppingCartID" class="form-control" />
-                <span asp-validation-for="ShoppingCartID" class="text-danger"></span>
+                <span asp-validation-for="ShoppingCartID" class="text-danger validationField"></span>
             </div>
             <div class="form-group">
                 <label asp-for="Version" class="control-label"></label>
@@ -62,6 +62,14 @@
 <div>
     <a asp-action="Index">Back to List</a>
 </div>
+
+@section Styles {
+    <style>
+        .validationField {
+            color: yellow !important;
+        }
+    </style>
+}
 
 @section Scripts {
     @{await Html.RenderPartialAsync("_ValidationScriptsPartial");}
